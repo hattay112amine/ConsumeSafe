@@ -5,20 +5,28 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch:
+
+env:
+  APP_NAME: "consumesafe"
+  DOCKER_IMAGE: "consumesafe:latest"
+  # Configuration des scans (Activés par défaut comme dans Jenkins)
+  GITLEAKS_ENABLED: "true"
+  TRIVY_ENABLED: "true"
+  # Configuration SonarCloud (basée sur vos captures)
+  SONAR_ORG: "hattay112amine"
+  SONAR_PROJECT_KEY: "hattay112amine_ConsumeSafe"
 
 jobs:
-  build-and-scan:
+  build-test-scan:
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Récupération du code
+      # 1. Checkout (Récupération du code)
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Important pour SonarCloud
+          fetch-depth: 0 # Important pour SonarQube (historique git)
 
-      # 2. Installation de Java 21
+      # 2. Setup JDK 21 & Maven (Remplacer 'tools')
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -26,45 +34,108 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      # 3. Build & Test (Maven)
-      - name: Build and Test
-        run: mvn clean package
+      # 3. Build Maven
+      - name: Build Maven
+        run: mvn clean package -DskipTests
 
-      # 4. Analyse SonarCloud
-      - name: SonarCloud Scan
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Laissé tel quel
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}    # Votre secret créé
-        run: |
-          mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-            -Dsonar.projectKey=khouloud472_ConsumeSafe \
-            -Dsonar.organization=khouloud472 \
-            -Dsonar.host.url=https://sonarcloud.io
+      # 4. Tests Unitaires
+      - name: Run Tests
+        run: mvn test
 
-      # 5. Scan de dépendances (OWASP)
-      - name: OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: 'ConsumeSafe'
-          path: '.'
-          format: 'HTML'
-          out: 'reports'
-
-      # 6. Scan de secrets (Gitleaks)
+      # 5. Secrets Scan - Gitleaks
       - name: Gitleaks Scan
+        if: env.GITLEAKS_ENABLED == 'true'
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 7. Scan Container (Trivy)
-      # On construit l'image d'abord pour pouvoir la scanner
-      - name: Build Docker Image
-        run: docker build -t consumesafetunisia:latest .
+      # 6. Dependency Scan - OWASP
+      # Note: Cela peut être long sur GitHub Actions. On utilise le cache Maven pour accélérer.
+      - name: OWASP Dependency Check
+        run: |
+          mvn org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=7 -DskipProvidedScope=true
 
-      - name: Trivy Image Scan
+      # 7. SonarCloud Analysis
+      - name: SonarCloud Scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          mvn sonar:sonar \
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
+            -Dsonar.organization=${{ env.SONAR_ORG }} \
+            -Dsonar.host.url=https://sonarcloud.io
+
+      # 8. Archive Artifacts (Success Post action)
+      - name: Archive Artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            target/*.jar
+            dependency-check-report.json
+
+  docker-build-push:
+    needs: build-test-scan
+    runs-on: ubuntu-latest
+    # Ne s'exécute que si les tests/scans ont réussi
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Login Docker Hub (Nécessaire pour le push plus tard)
+      - name: Login to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # 9. Build Docker Image
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE }} .
+          docker tag ${{ env.DOCKER_IMAGE }} ${{ env.DOCKER_IMAGE }}:${{ github.run_number }}
+
+      # 10. Container Scan - Trivy
+      - name: Trivy Container Scan
+        if: env.TRIVY_ENABLED == 'true'
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'consumesafetunisia:latest'
+          image-ref: '${{ env.DOCKER_IMAGE }}'
           format: 'table'
-          exit-code: '0' # On met 0 pour ne pas bloquer le build pour l'instant
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
+
+      # 11. Push to Registry (Seulement sur main)
+      - name: Push Docker Image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "Pushing image to registry..."
+          docker push ${{ env.DOCKER_IMAGE }}
+          docker push ${{ env.DOCKER_IMAGE }}:${{ github.run_number }}
+
+  deploy:
+    needs: docker-build-push
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      # 12. Deploy via SSH
+      # GitHub Actions ne peut pas faire "docker-compose up" localement pour votre serveur de prod.
+      # Il doit se connecter à votre serveur via SSH pour le faire.
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /chemin/vers/votre/projet
+            # Optionnel: git pull si vous utilisez le code source sur le serveur, 
+            # sinon juste docker pull si vous utilisez l'image du registre.
+            docker-compose down || true
+            docker-compose pull # Récupérer la nouvelle image pushée
+            docker-compose up -d
