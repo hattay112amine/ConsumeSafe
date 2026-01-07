@@ -1,0 +1,78 @@
+version: '3.9'
+
+services:
+  mysql:
+    image: mysql:8.0.36
+    container_name: consumesafe-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: consumesafe
+      MYSQL_USER: consumesafe
+      MYSQL_PASSWORD: consumesafe123
+      MYSQL_TCP_PORT: 3306
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    networks:
+      - consumesafe-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: consumesafe:1.0.0
+    container_name: consumesafe-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/consumesafe?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=UTF-8
+      SPRING_DATASOURCE_USERNAME: consumesafe
+      SPRING_DATASOURCE_PASSWORD: consumesafe123
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.MySQL8Dialect
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: 8082
+      SERVER_SERVLET_CONTEXT_PATH: /api
+    ports:
+      - "8082:8082"
+    networks:
+      - consumesafe-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/api/products/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1024M
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  consumesafe-network:
+    driver: bridge

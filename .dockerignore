@@ -1,0 +1,21 @@
+# Git
+.git
+.gitignore
+
+# Maven
+target/
+.mvn/
+
+# Environnement
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Docs
+README.md
