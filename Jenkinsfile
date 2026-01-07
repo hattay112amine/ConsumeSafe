@@ -35,13 +35,15 @@ pipeline {
 
         /* ================= DEVSECOPS ================= */
 
-        stage('SAST - SonarQube') {
-            when {
-                expression { env.SONARQUBE_ENABLED == 'true' }
-            }
+         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('SonarQube') {
-                    sh 'mvn sonar:sonar -Dsonar.projectKey=consumesafe -Dsonar.projectName="ConsumeSafe Application"'
+                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                    sh """
+                        mvn sonar:sonar \
+                        -Dsonar.projectKey=country-service \
+                        -Dsonar.host.url=http://localhost:9000 \
+                        -Dsonar.login=${SONAR_TOKEN}
+                    """
                 }
             }
         }
