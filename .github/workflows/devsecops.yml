@@ -137,3 +137,20 @@ jobs:
             consumesafe=${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:${{ github.run_number }} \
             --context kind-devsecops-cluster
           kubectl rollout status deployment/consumesafe --context kind-devsecops-cluster
+
+      # --- NEW STEPS TO SHOW CLUSTER STATUS ---
+      - name: Show all namespaces
+        run: kubectl get ns --context kind-devsecops-cluster
+
+      - name: Show all pods
+        run: kubectl get pods -A --context kind-devsecops-cluster
+
+      - name: Describe all pods
+        run: kubectl describe pods --context kind-devsecops-cluster
+
+      - name: Show container logs
+        run: |
+          for pod in $(kubectl get pods -n default -o jsonpath="{.items[*].metadata.name}" --context kind-devsecops-cluster); do
+            echo "===== Logs for pod $pod ====="
+            kubectl logs $pod --context kind-devsecops-cluster
+          done
