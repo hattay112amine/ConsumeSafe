@@ -41,17 +41,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # CORRECTION OWASP :
-      # 1. On force la version 12.1.0 (pour éviter l'erreur 403)
-      # 2. On met failBuildOnCVSS=11 pour NE PAS bloquer le pipeline même avec des failles critiques.
-      #    (Cela permet de générer le rapport pour la démo sans casser le build)
       - name: OWASP Dependency Check
         continue-on-error: true
         run: |
           mvn org.owasp:dependency-check-maven:12.1.0:check -DfailBuildOnCVSS=11 -DskipProvidedScope=true
 
       - name: SonarCloud Scan
-        # Rappel : Désactivez "Automatic Analysis" sur sonarcloud.io pour que ça marche !
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -95,7 +90,7 @@ jobs:
         with:
           image-ref: '${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:latest'
           format: 'table'
-          exit-code: '0' # On met 0 ici aussi pour ne pas bloquer si Trivy trouve des failles (optionnel pour la démo)
+          exit-code: '0'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
@@ -106,3 +101,32 @@ jobs:
           echo "Pushing image to registry..."
           docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:latest
           docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:${{ github.run_number }}
+
+  deploy-kubernetes:
+    needs: docker-build-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.29.0'
+
+      - name: Deploy to Kubernetes
+        env:
+          DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:${{ github.run_number }}
+        run: |
+          kubectl config use-context docker-desktop
+          kubectl get nodes
+          kubectl apply -f k8s/
+
+      - name: Update Deployment Image
+        env:
+          DOCKER_IMAGE: ${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:${{ github.run_number }}
+        run: |
+          kubectl set image deployment/consumesafe consumesafe=$DOCKER_IMAGE
+          kubectl rollout status deployment/consumesafe
