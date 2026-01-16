@@ -121,12 +121,10 @@ jobs:
         with:
           cluster_name: devsecops-cluster
 
-      - name: Pull and Load Docker Image into KIND
+      - name: Load Docker Image into KIND
         run: |
           IMAGE_TAG=${{ github.run_number }}
-          # Pull the image from Docker Hub first
           docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:$IMAGE_TAG
-          # Load the image into KIND
           kind load docker-image ${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:$IMAGE_TAG --name devsecops-cluster
 
       - name: Deploy to Kubernetes
@@ -134,12 +132,14 @@ jobs:
           IMAGE_TAG=${{ github.run_number }}
           # Apply manifests
           kubectl apply -f k8s/ --context kind-devsecops-cluster
-          # Update deployment with the correct image tag
+          # Update deployment with correct image tag
           kubectl set image deployment/consumesafe \
             consumesafe=${{ secrets.DOCKER_USERNAME }}/${{ env.APP_NAME }}:$IMAGE_TAG \
             --context kind-devsecops-cluster
-          # Wait for pods to be ready
-          kubectl wait --for=condition=Ready pod -l app=consumesafe --timeout=180s --context kind-devsecops-cluster
+          # Give pods some time to start
+          sleep 10
+          # Wait for pods to be ready (longer timeout for first run)
+          kubectl wait --for=condition=Ready pod -l app=consumesafe --timeout=300s --context kind-devsecops-cluster
 
       - name: Show cluster info
         run: |
